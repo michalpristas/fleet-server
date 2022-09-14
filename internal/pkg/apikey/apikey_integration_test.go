@@ -52,7 +52,7 @@ func TestRead(t *testing.T) {
 	agentID := uuid.Must(uuid.NewV4()).String()
 	name := uuid.Must(uuid.NewV4()).String()
 	akey, err := Create(ctx, es, name, "", "true", []byte(testFleetRoles),
-		NewMetadata(agentID, TypeAccess))
+		NewMetadata(agentID, "", TypeAccess))
 	if err != nil {
 		t.Fatal(err)
 	}
