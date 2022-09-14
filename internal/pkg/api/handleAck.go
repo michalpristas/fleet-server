@@ -406,9 +406,8 @@ func (ack *AckT) updateAPIKey(ctx context.Context,
 				}
 			}
 		}
+		ack.invalidateAPIKeys(ctx, toRetireAPIKeyIDs, apiKeyID)
 	}
-
-	ack.invalidateAPIKeys(ctx, toRetireAPIKeyIDs, apiKeyID)
 
 	body := makeUpdatePolicyBody(
 		policyID,
@@ -462,7 +461,7 @@ func cleanRoles(roles json.RawMessage) (json.RawMessage, int, error) {
 func (ack *AckT) invalidateAPIKeys(ctx context.Context, toRetireAPIKeyIDs []model.ToRetireAPIKeyIdsItems, skip string) {
 	ids := make([]string, 0, len(toRetireAPIKeyIDs))
 	for _, k := range toRetireAPIKeyIDs {
-		if k.ID == skip {
+		if k.ID == skip || k.ID == "" {
 			continue
 		}
 		ids = append(ids, k.ID)
