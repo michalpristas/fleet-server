@@ -351,7 +351,6 @@ func (ack *AckT) handlePolicyChange(ctx context.Context, zlog zerolog.Logger, ag
 		return nil
 	}
 
-	ack.invalidateAPIKeys(ctx, agent)
 	for _, output := range agent.Outputs {
 		if output.Type != policy.OutputTypeElasticsearch {
 			continue
@@ -409,21 +408,7 @@ func (ack *AckT) updateAPIKey(ctx context.Context,
 		}
 	}
 
-	sz := len(toRetireAPIKeyIDs)
-	if sz > 0 {
-		ids := make([]string, sz)
-		for i := 0; i < sz; i++ {
-			if toRetireAPIKeyIDs[i].ID == apiKeyID {
-				// already updated
-				continue
-			}
-			ids[i] = toRetireAPIKeyIDs[i].ID
-		}
-		log.Info().Strs("ids", ids).Msg("Invalidate old API keys")
-		if err := ack.bulk.APIKeyInvalidate(ctx, ids...); err != nil {
-			log.Warn().Err(err).Strs("ids", ids).Msg("Failed to invalidate API keys")
-		}
-	}
+	ack.invalidateAPIKeys(ctx, toRetireAPIKeyIDs, apiKeyID)
 
 	body := makeUpdatePolicyBody(
 		policyID,
@@ -449,22 +434,6 @@ func (ack *AckT) updateAPIKey(ctx context.Context,
 	return errors.Wrap(err, "handlePolicyChange update")
 }
 
-func (ack *AckT) invalidateAPIKeys(ctx context.Context, agent *model.Agent) {
-	var ids []string
-	for _, out := range agent.Outputs {
-		for _, k := range out.ToRetireAPIKeyIds {
-			ids = append(ids, k.ID)
-		}
-	}
-
-	if len(ids) > 0 {
-		log.Info().Strs("fleet.policy.apiKeyIDsToRetire", ids).Msg("Invalidate old API keys")
-		if err := ack.bulk.APIKeyInvalidate(ctx, ids...); err != nil {
-			log.Info().Err(err).Strs("ids", ids).Msg("Failed to invalidate API keys")
-		}
-	}
-}
-
 func cleanRoles(roles json.RawMessage) (json.RawMessage, int, error) {
 	rr := smap.Map{}
 	if err := json.Unmarshal(roles, &rr); err != nil {
@@ -488,6 +457,23 @@ func cleanRoles(roles json.RawMessage) (json.RawMessage, int, error) {
 
 	r, err := json.Marshal(rr)
 	return r, len(keys), errors.Wrap(err, "failed to marshal resulting role definition")
+}
+
+func (ack *AckT) invalidateAPIKeys(ctx context.Context, toRetireAPIKeyIDs []model.ToRetireAPIKeyIdsItems, skip string) {
+	var ids []string
+	for _, k := range toRetireAPIKeyIDs {
+		if k.ID == skip {
+			continue
+		}
+		ids = append(ids, k.ID)
+	}
+
+	if len(ids) > 0 {
+		log.Info().Strs("fleet.policy.apiKeyIDsToRetire", ids).Msg("Invalidate old API keys")
+		if err := ack.bulk.APIKeyInvalidate(ctx, ids...); err != nil {
+			log.Info().Err(err).Strs("ids", ids).Msg("Failed to invalidate API keys")
+		}
+	}
 }
 
 func (ack *AckT) handleUnenroll(ctx context.Context, zlog zerolog.Logger, agent *model.Agent) error {
