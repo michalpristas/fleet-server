@@ -460,7 +460,7 @@ func cleanRoles(roles json.RawMessage) (json.RawMessage, int, error) {
 }
 
 func (ack *AckT) invalidateAPIKeys(ctx context.Context, toRetireAPIKeyIDs []model.ToRetireAPIKeyIdsItems, skip string) {
-	var ids []string
+	ids := make([]string, 0, len(toRetireAPIKeyIDs))
 	for _, k := range toRetireAPIKeyIDs {
 		if k.ID == skip {
 			continue
