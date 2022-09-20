@@ -44,8 +44,48 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
+<<<<<<< HEAD
 	// Try to get the key that doesn't exist, expect ErrApiKeyNotFound
 	_, err = Read(ctx, es, "0000000000000")
+=======
+	// Create the key
+	agentID := uuid.Must(uuid.NewV4()).String()
+	name := uuid.Must(uuid.NewV4()).String()
+	akey, err := Create(ctx, es, name, "", "true", []byte(testFleetRoles),
+		NewMetadata(agentID, TypeAccess))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get the key and verify that metadata was saved correctly
+	aKeyMeta, err := Read(ctx, es, akey.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := cmp.Diff(ManagedByFleetServer, aKeyMeta.Metadata.ManagedBy)
+	if diff != "" {
+		t.Error(diff)
+	}
+
+	diff = cmp.Diff(true, aKeyMeta.Metadata.Managed)
+	if diff != "" {
+		t.Error(diff)
+	}
+
+	diff = cmp.Diff(agentID, aKeyMeta.Metadata.AgentID)
+	if diff != "" {
+		t.Error(diff)
+	}
+
+	diff = cmp.Diff(TypeAccess.String(), aKeyMeta.Metadata.Type)
+	if diff != "" {
+		t.Error(diff)
+	}
+
+	// Try to get the key that doesn't exists, expect ErrApiKeyNotFound
+	_, err = Read(ctx, es, "0000000000000", false)
+>>>>>>> 46ac14bafa6a52366ca2ef528b2bef18636fc43d
 	if !errors.Is(err, ErrAPIKeyNotFound) {
 		t.Errorf("Unexpected error type: %v", err)
 	}

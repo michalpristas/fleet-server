@@ -15,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pkg/errors"
-
 	"github.com/elastic/fleet-server/v7/internal/pkg/bulk"
 	"github.com/elastic/fleet-server/v7/internal/pkg/cache"
 	"github.com/elastic/fleet-server/v7/internal/pkg/config"
@@ -26,6 +24,8 @@ import (
 	"github.com/elastic/fleet-server/v7/internal/pkg/logger"
 	"github.com/elastic/fleet-server/v7/internal/pkg/model"
 	"github.com/elastic/fleet-server/v7/internal/pkg/policy"
+	"github.com/elastic/fleet-server/v7/internal/pkg/smap"
+	"github.com/pkg/errors"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/rs/zerolog"
@@ -352,9 +352,81 @@ func (ack *AckT) handlePolicyChange(ctx context.Context, zlog zerolog.Logger, ag
 	}
 
 	ack.invalidateAPIKeys(ctx, agent)
+	for _, output := range agent.Outputs {
+		if output.Type != policy.OutputTypeElasticsearch {
+			continue
+		}
+
+		err := ack.updateAPIKey(ctx,
+			zlog,
+			agent.Id,
+			currRev, currCoord,
+			agent.PolicyID, output.APIKeyID, output.PermissionsHash,
+			output.ToRetireAPIKeyIds)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+
+}
+
+func (ack *AckT) updateAPIKey(ctx context.Context,
+	zlog zerolog.Logger,
+	agentID string,
+	currRev, currCoord int64,
+	policyID, apiKeyID, permissionHash string,
+	toRetireAPIKeyIDs []model.ToRetireAPIKeyIdsItems) error {
+
+	if apiKeyID != "" {
+		res, err := ack.bulk.APIKeyRead(ctx, apiKeyID, true)
+		if err != nil {
+			zlog.Error().
+				Err(err).
+				Str(LogAPIKeyID, apiKeyID).
+				Msg("Failed to read API Key roles")
+		} else {
+			clean, removedRolesCount, err := cleanRoles(res.RoleDescriptors)
+			if err != nil {
+				zlog.Error().
+					Err(err).
+					RawJSON("roles", res.RoleDescriptors).
+					Str(LogAPIKeyID, apiKeyID).
+					Msg("Failed to cleanup roles")
+			} else if removedRolesCount > 0 {
+				if err := ack.bulk.APIKeyUpdate(ctx, apiKeyID, permissionHash, clean); err != nil {
+					zlog.Error().Err(err).RawJSON("roles", clean).Str(LogAPIKeyID, apiKeyID).Msg("Failed to update API Key")
+				} else {
+					zlog.Debug().
+						Str("hash.sha256", permissionHash).
+						Str(LogAPIKeyID, apiKeyID).
+						RawJSON("roles", clean).
+						Int("removedRoles", removedRolesCount).
+						Msg("Updating agent record to pick up reduced roles.")
+				}
+			}
+		}
+	}
+
+	sz := len(toRetireAPIKeyIDs)
+	if sz > 0 {
+		ids := make([]string, sz)
+		for i := 0; i < sz; i++ {
+			if toRetireAPIKeyIDs[i].ID == apiKeyID {
+				// already updated
+				continue
+			}
+			ids[i] = toRetireAPIKeyIDs[i].ID
+		}
+		log.Info().Strs("ids", ids).Msg("Invalidate old API keys")
+		if err := ack.bulk.APIKeyInvalidate(ctx, ids...); err != nil {
+			log.Warn().Err(err).Strs("ids", ids).Msg("Failed to invalidate API keys")
+		}
+	}
 
 	body := makeUpdatePolicyBody(
-		agent.PolicyID,
+		policyID,
 		currRev,
 		currCoord,
 	)
@@ -362,14 +434,14 @@ func (ack *AckT) handlePolicyChange(ctx context.Context, zlog zerolog.Logger, ag
 	err := ack.bulk.Update(
 		ctx,
 		dl.FleetAgents,
-		agent.Id,
+		agentID,
 		body,
 		bulk.WithRefresh(),
 		bulk.WithRetryOnConflict(3),
 	)
 
-	zlog.Info().Err(err).
-		Str(LogPolicyID, agent.PolicyID).
+	zlog.Err(err).
+		Str(LogPolicyID, policyID).
 		Int64("policyRevision", currRev).
 		Int64("policyCoordinator", currCoord).
 		Msg("ack policy")
@@ -391,6 +463,31 @@ func (ack *AckT) invalidateAPIKeys(ctx context.Context, agent *model.Agent) {
 			log.Info().Err(err).Strs("ids", ids).Msg("Failed to invalidate API keys")
 		}
 	}
+}
+
+func cleanRoles(roles json.RawMessage) (json.RawMessage, int, error) {
+	rr := smap.Map{}
+	if err := json.Unmarshal(roles, &rr); err != nil {
+		return nil, 0, errors.Wrap(err, "failed to unmarshal provided roles")
+	}
+
+	keys := make([]string, 0, len(rr))
+	for k := range rr {
+		if strings.HasSuffix(k, "-rdstale") {
+			keys = append(keys, k)
+		}
+	}
+
+	if len(keys) == 0 {
+		return roles, 0, nil
+	}
+
+	for _, k := range keys {
+		delete(rr, k)
+	}
+
+	r, err := json.Marshal(rr)
+	return r, len(keys), errors.Wrap(err, "failed to marshal resulting role definition")
 }
 
 func (ack *AckT) handleUnenroll(ctx context.Context, zlog zerolog.Logger, agent *model.Agent) error {
